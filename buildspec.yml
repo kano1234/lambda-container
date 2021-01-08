@@ -1,0 +1,35 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - apt-get update -y
+      - apt-get install -y jq
+      - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      - unzip -qq awscliv2.zip
+      - ./aws/install --bin-dir /root/.pyenv/shims --install-dir /usr/local/aws-cli --update
+      - aws --version
+  pre_build:
+    commands:
+      - echo Export environment variables...
+      - export ECR_REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+      - echo Logging in to Amazon ECR...
+      - docker --version
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
+      - IMAGE_TAG=$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION} | head -c 8)
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build --no-cache -t ${IMAGE_REPO_NAME}:${IMAGE_TAG} .
+      - docker tag ${IMAGE_REPO_NAME}:${IMAGE_TAG} ${ECR_REPO}/${IMAGE_REPO_NAME}:${IMAGE_TAG}
+      - docker tag ${IMAGE_REPO_NAME}:${IMAGE_TAG} ${ECR_REPO}/${IMAGE_REPO_NAME}:latest
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker image...
+      - docker push ${ECR_REPO}/${IMAGE_REPO_NAME}:${IMAGE_TAG}
+      - docker push ${ECR_REPO}/${IMAGE_REPO_NAME}:latest
+      - echo Updated docker image for lambda...
+      - IMAGE_DIGEST=$(aws ecr describe-images --repository-name ${IMAGE_REPO_NAME} --image-ids imageTag=latest | jq -r '.imageDetails[0].imageDigest')
+      - aws lambda update-function-code --function-name ${IMAGE_REPO_NAME} --image-uri ${ECR_REPO}/${IMAGE_REPO_NAME}@${IMAGE_DIGEST}

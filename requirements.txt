@@ -1,0 +1,6 @@
+###### Requirements without Version Specifiers ######
+requests
+# Enable for local testing
+# boto3
+
+###### Requirements with Version Specifiers ######

@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  AccountID:
+    Type: String
+    Default: '123456789012'
+  ImageRepoName:
+    Type: String
+    Default: 'lambda-container-cfn'
+  ArtifactStoreLocation:
+    Type: String
+    Default: 'codepipeline-ap-northeast-1-123456789012'
+
+Resources:
+  CodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties: 
+      RepositoryName: !Ref ImageRepoName
+      RepositoryDescription: Create a codePipeline with cloudformation
+  ECR:
+    Type: AWS::ECR::Repository
+    Properties: 
+      RepositoryName: !Ref ImageRepoName
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: !Sub codebuild-${ImageRepoName}-service-role
+      Description: Create a codePipeline with cloudformation
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+        - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /service-role/
+      Policies: 
+        - PolicyName: !Sub CodeBuildPolicy-${ImageRepoName}
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:ap-northeast-1:123456789012:log-group:codebuild:${ImageRepoName}
+                  - !Sub arn:aws:logs:ap-northeast-1:123456789012:log-group:codebuild:${ImageRepoName}:*
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub arn:aws:s3:::${ArtifactStoreLocation}/*
+  CodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref ImageRepoName
+      Description: Create a codePipeline with cloudformation
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn 
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: !Ref AccountID
+          - Name: AWS_DEFAULT_REGION
+            Type: PLAINTEXT
+            Value: ap-northeast-1
+          - Name: IMAGE_REPO_NAME
+            Type: PLAINTEXT
+            Value: !Ref ImageRepoName
+      Source:
+        Type: CODEPIPELINE
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: codebuild
+          StreamName: !Ref ImageRepoName
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: !Sub codePipeline-${ImageRepoName}-service-role
+      Description: Create a codePipeline with cloudformation
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /service-role/
+      Policies: 
+        - PolicyName: !Sub CodePipelinePolicy-${ImageRepoName}
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${ArtifactStoreLocation}/*
+              - Effect: Allow
+                Action:
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetRepository
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                Resource:
+                  - !GetAtt CodeCommit.Arn
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuildBatches
+                  - codebuild:StartBuildBatch
+                Resource:
+                  - !GetAtt CodeBuild.Arn
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Ref ImageRepoName
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: 1
+              Configuration:
+                RepositoryName: !GetAtt CodeCommit.Name
+                BranchName: master
+                OutputArtifactFormat: CODE_ZIP
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 1
+              Region: ap-northeast-1
+              Namespace: SourceVariables
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName: !Ref CodeBuild
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              RunOrder: 1
+              Region: ap-northeast-1
+              Namespace: BuildVariables
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactStoreLocation
+      RestartExecutionOnUpdate: false
